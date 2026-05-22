@@ -1,0 +1,4 @@
+allowBuilds:
+  '@nestjs/core': false
+  mongodb-client-encryption: true # required for client-side field level encryption
+  unrs-resolver: false
