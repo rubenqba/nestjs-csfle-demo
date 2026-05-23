@@ -1,18 +1,21 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
-import { PeopleEntity, PeopleRepository, PeopleSchema } from './app.repository';
+import { MongooseModule, MongooseModuleOptions } from '@nestjs/mongoose';
+import { PatientsModule } from './patients/patients.module';
+import { AutoEncryptionOptions } from 'mongodb';
+import { PeopleModule } from './people/people.module';
+import path from 'path';
 
 const KEY_VAULT_NS = 'encryption.__keyVault';
+type CryptSharedLibPath = NonNullable<NonNullable<AutoEncryptionOptions['extraOptions']>['cryptSharedLibPath']>;
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (cfg: ConfigService) => {
+      connectionName: 'default',
+      useFactory: (cfg: ConfigService): MongooseModuleOptions => {
         const masterKey = cfg.getOrThrow<string>('LOCAL_MASTER_KEY');
         const localMasterKey = Buffer.from(masterKey, 'base64');
         if (localMasterKey.length !== 96) {
@@ -31,19 +34,35 @@ const KEY_VAULT_NS = 'encryption.__keyVault';
         };
       },
     }),
-    MongooseModule.forFeature([{ name: PeopleEntity.name, schema: PeopleSchema, collection: 'people' }]),
-  ],
-  controllers: [AppController],
-  providers: [
-    {
-      provide: 'APP_MODULE_OPTIONS',
+    MongooseModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: () => {
-        return { keyName: 'csfle-demo-key' };
+      connectionName: 'auto',
+      useFactory: (cfg: ConfigService): MongooseModuleOptions => {
+        const masterKey = cfg.getOrThrow<string>('LOCAL_MASTER_KEY');
+        const localMasterKey = Buffer.from(masterKey, 'base64');
+        if (localMasterKey.length !== 96) {
+          throw new Error('La clave maestra local debe ser una cadena base64 que decodifique a 96 bytes');
+        }
+        // load the shared library path from config and ensure it's an absolute path
+        const cryptSharedLibPath = path.resolve(cfg.getOrThrow<string>('SHARED_LIB_PATH')) as CryptSharedLibPath;
+        return {
+          uri: cfg.get<string>('MONGODB_URI'),
+          dbName: 'csfle-auto',
+          autoEncryption: {
+            keyVaultNamespace: KEY_VAULT_NS,
+            kmsProviders: {
+              local: { key: localMasterKey },
+            },
+            extraOptions: {
+              cryptSharedLibPath,
+              cryptSharedLibRequired: true,
+            },
+          },
+        };
       },
-    },
-    AppService,
-    PeopleRepository,
+    }),
+    PatientsModule,
+    PeopleModule,
   ],
 })
 export class AppModule {}
